@@ -1,0 +1,37 @@
+# Main photo per item (order.json): the illustration / the item alone first,
+# model photos last. Runs after every photo upload; only new photos are checked.
+name: main-image
+on:
+  push:
+    branches: [main]
+    paths: [manifest.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: main-image
+  cancel-in-progress: false
+jobs:
+  order:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pillow numpy ai-edge-litert
+      - uses: actions/cache@v4
+        with:
+          path: model.tflite
+          key: efficientdet-lite2-v1
+      - run: test -f model.tflite || curl -sSfL -o model.tflite https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/float32/latest/efficientdet_lite2.tflite
+      - run: python3 tools/main_image.py model.tflite
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add order.json order-cache.json
+          git diff --cached --quiet && exit 0
+          git commit -m "תמונה ראשית: איור / הפריט לבד ראשון"
+          for i in 1 2 3 4; do git pull --rebase -q origin main && git push -q origin HEAD:main && exit 0; sleep $((i*5)); done
+          exit 1
