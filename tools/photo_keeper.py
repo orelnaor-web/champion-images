@@ -175,7 +175,7 @@ def copy_one(u):
 
 def copy_all(urls):
     done, fails, lock = {}, {}, threading.Lock()
-    with cf.ThreadPoolExecutor(8) as ex:
+    with cf.ThreadPoolExecutor(3) as ex:   # timberland.co.il answers 429 above ~4 parallel downloads
         futs = {ex.submit(copy_one, u): u for u in urls}
         for i, f in enumerate(cf.as_completed(futs), 1):
             u = futs[f]
