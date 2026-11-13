@@ -1,4 +1,4 @@
-# מתקין את "שומר התמונות" כמשימה מתוזמנת ב-Windows (tools\photo_keeper.py).
+﻿# מתקין את "שומר התמונות" כמשימה מתוזמנת ב-Windows (tools\photo_keeper.py).
 #   להתקנה:  powershell -ExecutionPolicy Bypass -File tools\install_photo_keeper.ps1
 #   להסרה:   powershell -ExecutionPolicy Bypass -File tools\install_photo_keeper.ps1 -Remove
 # מה זה עושה: כל יום ב-05:40 — תמונות לפריטים חדשים מאתרי טימברלנד / נאוטיקה / אימפוריום, וכל תמונה שעוד לא אצלנו
