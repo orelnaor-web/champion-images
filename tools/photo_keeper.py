@@ -141,6 +141,46 @@ def site_index():
     return idx
 
 
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36"
+
+
+def emporium_page(key):
+    """Orel 13.11.2026 ("תחפש לכל דבר שיש לו רק איור ... אלו דוגמנים שלנו באתרים"): many Champion items are on
+    emporium.co.il but NOT in its sitemap. The product page is /brands/<style>-<rest> (118852ms513 -> 118852-ms513).
+    Returns the item's own photo links (no cache folder), in site order; [] when there is no page."""
+    m = re.match(r"^(\d+)([a-z].*)$", key)
+    if not m:
+        return []
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(f"https://www.emporium.co.il/brands/{m.group(1)}-{m.group(2)}",
+                                                          headers={"User-Agent": UA}), timeout=40)
+        if "/brands/" not in r.geturl():
+            return []
+        t = r.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return []
+    found = {}
+    for u in re.findall(r"https?://www\.emporium\.co\.il/pub/media/catalog/product/[^\"'\s)]+?\.(?:jpe?g|png|webp)", t, re.I):
+        stem = re.sub(r"-\d{10,}\.(jpe?g|png|webp)$", "", u.split("/")[-1], flags=re.I)
+        mm = re.match(r"^(.*?)(?:_(\d+))?$", stem)
+        if norm(mm.group(1)) == key:
+            found.setdefault(https(re.sub(r"/cache/[0-9a-f]{20,}/", "/", u)), int(mm.group(2) or 0))
+    return [u for u, _ in sorted(found.items(), key=lambda x: x[1])][:6]
+
+
+def gallery_only_photos(rows):
+    """Champion rows whose photos are all old gallery files (img/ — mostly drawings): look up the emporium page.
+    -> {key: [site links]}; the swap puts our copies of them first and keeps the drawing last."""
+    keys = [r["key"] for r in rows if r.get("urls") and all("/champion-images/img/" in u for u in r["urls"])]
+    out = {}
+    with cf.ThreadPoolExecutor(4) as ex:
+        for k, urls in zip(keys, ex.map(emporium_page, keys)):
+            if urls:
+                out[k] = urls
+    log("gallery-only items:", len(keys), "| with photos on emporium:", len(out))
+    return out
+
+
 # ---------- copies ----------
 def target(u):
     host = re.match(r"https?://([^/]+)", u).group(1).lower()
@@ -246,11 +286,19 @@ let created=0,changed=0,failed=0;
 for(const n of NEW){const r=byKey.get(n.key);if(r&&(r.urls||[]).length)continue;
  try{if(r)await retry(()=>PI.update(r.id,{urls:n.urls.map(fix),source:n.source,updated_at:now}));else await retry(()=>PI.create({key:n.key,code:n.code,brand:n.brand,source:n.source,urls:n.urls.map(fix),updated_at:now}));created++;}catch(e){failed++}
  await sleep(420);}
+// gallery-only Champion items (drawings): our copies of the emporium photos first, the drawing stays last
+const EXTRA=JSON.parse(await Deno.readTextFile(%(extra)s));let photos=0;
+for(const [key,site] of Object.entries(EXTRA)){const r=byKey.get(key);if(!r||!site.length)continue;
+ const old=r.urls||[];if(!old.every(u=>String(u).includes('/champion-images/img/')))continue;
+ const hid=new Set(r.hidden_urls||[]);const urls=[...site.filter(u=>!hid.has(u)&&!old.includes(u)),...old];
+ if(urls.length===old.length)continue;
+ try{await retry(()=>PI.update(r.id,{urls,source:'emporium.co.il',updated_at:now}));r.urls=urls;photos++;}catch(e){failed++}
+ await sleep(420);}
 for(const r of all){const urls=(r.urls||[]).map(fix),hid=(r.hidden_urls||[]).map(fix);
  if(urls.every((u,i)=>u===r.urls[i])&&hid.every((u,i)=>u===(r.hidden_urls||[])[i]))continue;
  try{await retry(()=>PI.update(r.id,{urls,...(r.hidden_urls?{hidden_urls:hid}:{}),updated_at:now}));changed++;}catch(e){failed++}
  await sleep(420);}
-result={created,changed,failed};
+result={created,photos,changed,failed};
 """
 
 PREFS_JS = """
@@ -283,6 +331,8 @@ def main():
                 have.add(k)
     ext = {https(u) for r in rows for u in (r.get("urls") or []) + (r.get("hidden_urls") or []) if not OURS.match(https(u))}
     ext |= {u for n in new for u in n["urls"]}
+    extra = gallery_only_photos(rows)
+    ext |= {u for us in extra.values() for u in us}
     log("items without photo found on the sites:", len(new), "| links to copy:", len(ext))
     done, fails = copy_all(sorted(ext))
     for u, e in list(fails.items())[:30]:
@@ -296,10 +346,12 @@ def main():
         log("STOP: GitHub Pages did not publish the new photos in time; the apps were not switched (next run retries)")
         return
     with tempfile.TemporaryDirectory() as d:
-        mp, np_ = Path(d, "map.json"), Path(d, "new.json")
+        mp, np_, xp = Path(d, "map.json"), Path(d, "new.json"), Path(d, "extra.json")
         mp.write_text(json.dumps(done), encoding="utf-8")
         np_.write_text(json.dumps(new), encoding="utf-8")
-        res = b44_json(APP_CONTROL, SWAP_JS % {"map": json.dumps(mp.as_posix()), "new": json.dumps(np_.as_posix())})
+        xp.write_text(json.dumps({k: [done[u] for u in us if u in done] for k, us in extra.items()}), encoding="utf-8")
+        res = b44_json(APP_CONTROL, SWAP_JS % {"map": json.dumps(mp.as_posix()), "new": json.dumps(np_.as_posix()),
+                                               "extra": json.dumps(xp.as_posix())})
         log("Click Control photos:", res)
         res = b44_json(APP_CITRIX, PREFS_JS % {"map": json.dumps(mp.as_posix())})
         log("agents' own photo choices:", res)
