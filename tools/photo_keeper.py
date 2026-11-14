@@ -53,6 +53,7 @@ FOLDER = {"www.timberland.co.il": "b/tbl", "assets.timberland.eu": "b/tbleu", "c
 OURS = re.compile(r"^https://(orelnaor-web\.github\.io|base44\.app|[a-z0-9-]+\.base44\.app|media\.base44\.com)/", re.I)
 MAXSIDE, QUALITY = 900, 76
 DRY = "--dry" in sys.argv
+KEEP_ORIGINALS = True   # 14.11.2026: the apps link the original site photos; our copies are the backup only (see main)
 
 
 def log(*a):
@@ -170,7 +171,7 @@ def emporium_page(key):
 
 def gallery_only_photos(rows):
     """Champion rows whose photos are all old gallery files (img/ — mostly drawings): look up the emporium page.
-    -> {key: [site links]}; the swap puts our copies of them first and keeps the drawing last."""
+    -> {key: [site links]}; the swap keeps the drawing first and adds the site photos after it (Orel 14.11)."""
     keys = [r["key"] for r in rows if r.get("urls") and all("/champion-images/img/" in u for u in r["urls"])]
     out = {}
     with cf.ThreadPoolExecutor(4) as ex:
@@ -286,11 +287,12 @@ let created=0,changed=0,failed=0;
 for(const n of NEW){const r=byKey.get(n.key);if(r&&(r.urls||[]).length)continue;
  try{if(r)await retry(()=>PI.update(r.id,{urls:n.urls.map(fix),source:n.source,updated_at:now}));else await retry(()=>PI.create({key:n.key,code:n.code,brand:n.brand,source:n.source,urls:n.urls.map(fix),updated_at:now}));created++;}catch(e){failed++}
  await sleep(420);}
-// gallery-only Champion items (drawings): our copies of the emporium photos first, the drawing stays last
+// gallery-only Champion items (drawings): the drawing STAYS FIRST, our copies of the emporium photos are added after it
+// (Orel 14.11.2026: "since we took the photos from our official sites everything looks less good" — 466 rows reverted)
 const EXTRA=JSON.parse(await Deno.readTextFile(%(extra)s));let photos=0;
 for(const [key,site] of Object.entries(EXTRA)){const r=byKey.get(key);if(!r||!site.length)continue;
  const old=r.urls||[];if(!old.every(u=>String(u).includes('/champion-images/img/')))continue;
- const hid=new Set(r.hidden_urls||[]);const urls=[...site.filter(u=>!hid.has(u)&&!old.includes(u)),...old];
+ const hid=new Set(r.hidden_urls||[]);const urls=[...old,...site.filter(u=>!hid.has(u)&&!old.includes(u))];
  if(urls.length===old.length)continue;
  try{await retry(()=>PI.update(r.id,{urls,source:'emporium.co.il',updated_at:now}));r.urls=urls;photos++;}catch(e){failed++}
  await sleep(420);}
@@ -345,16 +347,22 @@ def main():
     if pushed and not wait_live([f"{PAGES}/{p}" for p in pushed]):
         log("STOP: GitHub Pages did not publish the new photos in time; the apps were not switched (next run retries)")
         return
+    # Orel 14.11.2026 ("since we took the photos... everything looks less good — can we use the old ones?"):
+    # the apps show the ORIGINAL sharp file again; our 900px copy is only the backup (Click Agent photoFetch.ourCopy
+    # computes it from the original link with the same rule as target()). So: copies are still made and pushed,
+    # but rows and the agents' picks are NOT switched to them (empty map); new rows / extra photos keep the site links.
     with tempfile.TemporaryDirectory() as d:
         mp, np_, xp = Path(d, "map.json"), Path(d, "new.json"), Path(d, "extra.json")
-        mp.write_text(json.dumps(done), encoding="utf-8")
+        mp.write_text(json.dumps({} if KEEP_ORIGINALS else done), encoding="utf-8")
         np_.write_text(json.dumps(new), encoding="utf-8")
-        xp.write_text(json.dumps({k: [done[u] for u in us if u in done] for k, us in extra.items()}), encoding="utf-8")
+        xp.write_text(json.dumps({k: (us if KEEP_ORIGINALS else [done[u] for u in us if u in done]) for k, us in extra.items()}),
+                      encoding="utf-8")
         res = b44_json(APP_CONTROL, SWAP_JS % {"map": json.dumps(mp.as_posix()), "new": json.dumps(np_.as_posix()),
                                                "extra": json.dumps(xp.as_posix())})
         log("Click Control photos:", res)
-        res = b44_json(APP_CITRIX, PREFS_JS % {"map": json.dumps(mp.as_posix())})
-        log("agents' own photo choices:", res)
+        if not KEEP_ORIGINALS:
+            res = b44_json(APP_CITRIX, PREFS_JS % {"map": json.dumps(mp.as_posix())})
+            log("agents' own photo choices:", res)
     log("done")
 
 
